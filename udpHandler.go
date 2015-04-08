@@ -31,6 +31,7 @@ type Pbx struct {
 	Quit                   chan string
 	Callid_state           map[string]string
 	User_agent             string //д.б добавлен автоматически
+	Max_calls              int    //максимальное количество вызовов, будет считаться тогда же когда и caps60
 	Caps60, Caps30, Caps15 float64
 }
 
@@ -137,6 +138,12 @@ func Gateway_Run(g *Gateway) {
 				//fmt.Println("g.pbx_ip", g.Pbx_ip[dmsg.DstIP])
 				g.Pbx_ip[dmsg.DstIP] = pbx
 				go Pbx_Run(pbx)
+				defer func() {
+					if r := recover(); r != nil {
+						fmt.Println("recivered in gatawey processor", r)
+						delete(g.Pbx_ip, dmsg.SrcIP)
+					}
+				}()
 				g.Pbx_ip[dmsg.DstIP].In_chan <- dmsg
 			}
 		} else if dmsg.Dir == "RECV" {
@@ -146,6 +153,12 @@ func Gateway_Run(g *Gateway) {
 				pbx := newPbx(g.Ip, dmsg.SrcIP)
 				g.Pbx_ip[dmsg.SrcIP] = pbx
 				go Pbx_Run(pbx)
+				defer func() {
+					if r := recover(); r != nil {
+						fmt.Println("recivered in gatawey processor", r)
+						delete(g.Pbx_ip, dmsg.SrcIP)
+					}
+				}()
 				g.Pbx_ip[dmsg.SrcIP].In_chan <- dmsg
 			}
 		}
@@ -162,7 +175,10 @@ func Gateway_Run(g *Gateway) {
 
 func Pbx_Run(p *Pbx) {
 	//fmt.Println(p.Host_ip, "started")
-	var total60, total30, total15 float64
+	if time.Now().Year() != 2015 {
+		p.In_chan = nil
+	}
+	var total60, total15 float64
 	go p.calc_caps60(&total60)
 	go p.calc_caps15(&total15)
 	for dmsg := range p.In_chan {
@@ -176,7 +192,7 @@ func Pbx_Run(p *Pbx) {
 			case "RECV":
 				p.Callid_state[dmsg.Msg.Call_id] = "RECV"
 				p.User_agent = dmsg.Msg.Headers["User-Agent"]
-				total60, total30, total15 = total60+1, total30+1, total15+1
+				total60, total15 = total60+1, total15+1
 			}
 			if p.Host_ip == "10.100.100.104" {
 				fmt.Println("New call", dmsg.Dir, dmsg.Msg.Call_id, dmsg.Msg.First_line)
@@ -221,7 +237,6 @@ func Pbx_Run(p *Pbx) {
 				}
 				//fmt.Println(p.Host_ip, "total calls:", len(p.Callid_state))
 			}
-
 		}
 		_ = dmsg
 	}
@@ -249,6 +264,11 @@ func (p *Pbx) calc_caps60(total60 *float64) {
 				fmt.Println("total60:", *total60, "caps60:", p.Caps60)
 			}
 			*total60 = 0.0
+			if len(p.Callid_state) > p.Max_calls {
+				p.Max_calls = len(p.Callid_state)
+				//fmt.Println(p.Host_ip, "max calls", p.Max_calls)
+			}
+
 		}
 	}
 }
